@@ -70,14 +70,21 @@ def _numpy_to_base64(image: np.ndarray) -> str:
     return base64.b64encode(buffer).decode("utf-8")
 
 
-def _numpy_to_base64_rgb(image: np.ndarray) -> str:
-    """Convierte array numpy BGR a base64 PNG."""
-    if len(image.shape) == 2:
-        # Escala de grises
-        _, buffer = cv2.imencode(".png", image)
-    else:
-        _, buffer = cv2.imencode(".png", image)
+def _numpy_to_base64_color(image_bgr: np.ndarray) -> str:
+    """Convierte imagen BGR a base64 PNG con corrección BGR→RGB para display correcto."""
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    _, buffer = cv2.imencode(".png", image_rgb)
     return base64.b64encode(buffer).decode("utf-8")
+
+
+def _boost_bgr_color(color_bgr: tuple) -> tuple:
+    """Aumenta la saturación de un color BGR para hacerlo visualmente distinguible."""
+    arr = np.array([[list(color_bgr)]], dtype=np.uint8)
+    hsv = cv2.cvtColor(arr, cv2.COLOR_BGR2HSV)[0, 0]
+    hsv[1] = min(255, int(hsv[1] * 2.0) + 60)
+    hsv[2] = max(80, int(hsv[2]))
+    boosted = cv2.cvtColor(np.array([[hsv]], dtype=np.uint8), cv2.COLOR_HSV2BGR)[0, 0]
+    return tuple(int(x) for x in boosted)
 
 
 @app.post("/api/upload")
@@ -263,14 +270,19 @@ async def process_stencil(
 
         if mode == "color" and layer_colors_hex[i]:
             color_bgr = quant_result["layer_colors_bgr"][i]
+            boosted_bgr = _boost_bgr_color(color_bgr)
+            b, g, r = boosted_bgr
+            color_hex_display = f"#{r:02x}{g:02x}{b:02x}"
             stencil_preview = cv2.cvtColor(result["stencil"], cv2.COLOR_GRAY2BGR)
-            # Donde es material (0 en stencil = 255 despues de invertir) pintar con color
-            cut_mask = result["stencil"] == 0  # 0 = material en stencil
-            stencil_preview[cut_mask] = color_bgr
-            stencil_preview[~cut_mask] = (255, 255, 255)
+            # 255 = área de corte = donde va la pintura → mostrar en color
+            # 0   = material     = gris claro (no blanco puro, para contraste)
+            cut_mask = result["stencil"] == 255
+            stencil_preview[cut_mask] = boosted_bgr
+            stencil_preview[~cut_mask] = (230, 230, 230)
             preview_img = cv2.resize(stencil_preview, (int(w * preview_scale), int(h * preview_scale)))
-            layer_previews.append(_numpy_to_base64_rgb(preview_img))
+            layer_previews.append(_numpy_to_base64_color(preview_img))
         else:
+            color_hex_display = None
             preview = cv2.resize(result["stencil"], (int(w * preview_scale), int(h * preview_scale)))
             layer_previews.append(_numpy_to_base64(preview))
 
@@ -287,7 +299,8 @@ async def process_stencil(
             "layer": i,
             "name": layer_name,
             "tonal_center": tonal_center,
-            "color_hex": color_hex,
+            "color_hex": color_hex,              # color real para PDF
+            "color_hex_display": color_hex_display,  # color boosted para UI
             "coverage_pct": quant_result["layer_percentages"][i],
             "islands_detected": result["num_islands"],
             "bridges_added": result["num_bridges"],
@@ -301,18 +314,27 @@ async def process_stencil(
     # Preview de imagen cuantizada
     quant_img = quant_result["quantized_image"]
     ref_shape = quant_img.shape
-    ref_dim = ref_shape[0] if len(ref_shape) == 2 else ref_shape[0]
     quant_preview_scale = min(1.0, 600 / max(ref_shape[:2]))
     new_w = int(ref_shape[1] * quant_preview_scale)
     new_h = int(ref_shape[0] * quant_preview_scale)
     quant_preview = cv2.resize(quant_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    if mode == "color":
+        # Boost saturation del preview cuantizado para que los colores sean distinguibles
+        # aunque la imagen original tenga colores neutros/desaturados
+        hsv = cv2.cvtColor(quant_preview, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 2.0 + 60, 0, 255)
+        quant_preview = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        quant_preview_b64 = _numpy_to_base64_color(quant_preview)
+    else:
+        quant_preview_b64 = _numpy_to_base64(quant_preview)
 
     return {
         "n_layers": n_layers,
         "mode": mode,
         "layer_previews": layer_previews,
         "layer_stats": layer_stats,
-        "quantized_preview": _numpy_to_base64_rgb(quant_preview) if mode == "color" else _numpy_to_base64(quant_preview),
+        "quantized_preview": quant_preview_b64,
     }
 
 
@@ -342,6 +364,9 @@ async def export_pdf(
     dpi: int = 150,
     margin: float = 0.5,
     overlap: float = 0.25,
+    paint_width: float = None,   # Ancho deseado de la pintura (en paint_unit)
+    paint_height: float = None,  # Alto deseado (opcional, se calcula si solo se da uno)
+    paint_unit: str = "cm",      # "cm" | "in"
 ):
     """
     Exporta todas las capas como PDF multi-pagina.
@@ -356,8 +381,38 @@ async def export_pdf(
     if session["stencils"] is None:
         raise HTTPException(status_code=400, detail="Primero procesa la imagen")
 
+    stencils = session["stencils"]
+
+    # Escalar stencils al tamaño físico deseado
+    if paint_width or paint_height:
+        cm_per_in = 2.54
+        orig_h, orig_w = stencils[0].shape
+
+        # Convertir dimensiones a pulgadas
+        if paint_unit == "cm":
+            target_w_in = (paint_width / cm_per_in) if paint_width else None
+            target_h_in = (paint_height / cm_per_in) if paint_height else None
+        else:
+            target_w_in = paint_width
+            target_h_in = paint_height
+
+        # Calcular dimensión faltante manteniendo aspecto
+        aspect = orig_w / orig_h
+        if target_w_in and not target_h_in:
+            target_h_in = target_w_in / aspect
+        elif target_h_in and not target_w_in:
+            target_w_in = target_h_in * aspect
+
+        new_w = int(target_w_in * dpi)
+        new_h = int(target_h_in * dpi)
+
+        stencils = [
+            cv2.resize(s, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            for s in stencils
+        ]
+
     pdf_bytes = generate_full_pdf(
-        stencil_layers=session["stencils"],
+        stencil_layers=stencils,
         paper_size=paper_size,
         dpi=dpi,
         margin=margin,
@@ -380,6 +435,9 @@ async def get_tile_info(
     dpi: int = 150,
     margin: float = 0.5,
     overlap: float = 0.25,
+    paint_width: float = None,
+    paint_height: float = None,
+    paint_unit: str = "cm",
 ):
     """Retorna informacion sobre como se dividiran las paginas."""
     if session_id not in _sessions:
@@ -390,7 +448,27 @@ async def get_tile_info(
         raise HTTPException(status_code=400, detail="Primero procesa la imagen")
 
     stencil = session["stencils"][0]
-    h, w = stencil.shape
+    orig_h, orig_w = stencil.shape
+
+    # Aplicar tamaño físico si se especifica
+    if paint_width or paint_height:
+        cm_per_in = 2.54
+        aspect = orig_w / orig_h
+        target_w_in = ((paint_width / cm_per_in) if paint_unit == "cm" else paint_width) if paint_width else None
+        target_h_in = ((paint_height / cm_per_in) if paint_unit == "cm" else paint_height) if paint_height else None
+        if target_w_in and not target_h_in:
+            target_h_in = target_w_in / aspect
+        elif target_h_in and not target_w_in:
+            target_w_in = target_h_in * aspect
+        w = int(target_w_in * dpi)
+        h = int(target_h_in * dpi)
+        # Mostrar dimensiones reales en cm
+        real_w_cm = round(target_w_in * cm_per_in, 1)
+        real_h_cm = round(target_h_in * cm_per_in, 1)
+    else:
+        w, h = orig_w, orig_h
+        real_w_cm = round(orig_w / dpi * 2.54, 1)
+        real_h_cm = round(orig_h / dpi * 2.54, 1)
 
     tile_config = calculate_tiles(w, h, paper_size, dpi, margin, overlap)
 
@@ -403,6 +481,7 @@ async def get_tile_info(
             round(tile_config["printable_area_in"][0], 2),
             round(tile_config["printable_area_in"][1], 2),
         ),
+        "real_size_cm": (real_w_cm, real_h_cm),
         "paper_size": paper_size,
         "dpi": dpi,
     }

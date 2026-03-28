@@ -628,6 +628,26 @@
                 </div>
 
                 <div class="control-group">
+                    <label>Tamano real de la pintura</label>
+                    <div style="display:flex; gap:0.4rem; align-items:center; margin-top:0.3rem;">
+                        <input type="number" id="paintWidth" placeholder="Ancho" min="1" max="500" value=""
+                               style="width:70px; text-align:center;">
+                        <span style="color:var(--text-secondary); font-size:0.8rem;">×</span>
+                        <input type="number" id="paintHeight" placeholder="Alto" min="1" max="500" value=""
+                               style="width:70px; text-align:center;">
+                        <select id="paintUnit" style="width:60px; padding:0.4rem 0.3rem;">
+                            <option value="cm">cm</option>
+                            <option value="in">in</option>
+                        </select>
+                    </div>
+                    <p style="color:var(--text-secondary); font-size:0.75rem; margin-top:0.3rem;">
+                        Dejar vacío = tamaño original de la imagen
+                    </p>
+                    <p id="paintSizeHint" style="color:var(--warning); font-size:0.78rem; margin-top:0.3rem; display:none;
+                       background:rgba(249,199,79,0.1); padding:0.3rem 0.5rem; border-radius:4px;"></p>
+                </div>
+
+                <div class="control-group">
                     <label>
                         DPI
                         <span class="value-display" id="dpiValue">150</span>
@@ -696,9 +716,17 @@
 
             <!-- Capas del stencil -->
             <div id="layersState" class="hidden">
+                <!-- Indicador de modo activo -->
+                <div id="modeIndicator" style="display:inline-flex; align-items:center; gap:0.5rem;
+                     padding:0.4rem 1rem; border-radius:20px; font-size:0.82rem; font-weight:600;
+                     margin-bottom:1rem; background:var(--bg-card); border:1px solid var(--border);">
+                    <span id="modeIndicatorIcon">◑</span>
+                    <span id="modeIndicatorText">Modo Banksy (escala de grises)</span>
+                </div>
+
                 <div class="preview-grid" style="margin-bottom:1rem">
                     <div class="preview-card">
-                        <div class="card-header">Imagen cuantizada (K-Means)</div>
+                        <div class="card-header" id="quantizedLabel">Imagen cuantizada (K-Means)</div>
                         <img id="previewQuantized" alt="Cuantizada">
                     </div>
                 </div>
@@ -724,6 +752,6 @@
         <span id="statusRight"></span>
     </div>
 
-    <script type="module" src="js/app.js"></script>
+    <script type="module" src="js/app.js?v=4"></script>
 </body>
 </html>

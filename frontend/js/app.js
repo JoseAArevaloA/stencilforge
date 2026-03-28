@@ -354,20 +354,84 @@ async function handleProcess() {
 }
 
 function renderLayers(data) {
-    let html = "";
-    for (const stat of data.layer_stats) {
-        const colorSwatch = stat.color_hex
-            ? `<span style="display:inline-block; width:14px; height:14px; border-radius:3px;
-                            background:${stat.color_hex}; border:1px solid rgba(255,255,255,0.3);
-                            vertical-align:middle; margin-right:4px;"></span>
-               <span style="font-family:monospace; font-size:0.75rem;">${stat.color_hex.toUpperCase()}</span>`
-            : `<span style="color:var(--text-secondary); font-size:0.8rem;">tono: ${stat.tonal_center}</span>`;
+    const isColor = data.mode === "color";
 
-        html += `
+    // Indicador de modo activo
+    const modeIcon = $("#modeIndicatorIcon");
+    const modeText = $("#modeIndicatorText");
+    const modeIndicator = $("#modeIndicator");
+    if (isColor) {
+        modeText.textContent = "Modo Color real — cada capa en su color";
+        modeIcon.textContent = "🎨";
+        modeIndicator.style.background = "rgba(233,69,96,0.15)";
+        modeIndicator.style.borderColor = "var(--accent)";
+        modeIndicator.style.color = "var(--accent)";
+    } else {
+        modeText.textContent = "Modo Banksy — escala de grises";
+        modeIcon.textContent = "◑";
+        modeIndicator.style.background = "var(--bg-card)";
+        modeIndicator.style.borderColor = "var(--border)";
+        modeIndicator.style.color = "var(--text-primary)";
+    }
+
+    // Label de imagen cuantizada
+    const quantLabel = $("#quantizedLabel");
+    if (quantLabel) {
+        quantLabel.textContent = isColor
+            ? "Imagen cuantizada — colores K-Means (LAB)"
+            : "Imagen cuantizada — tonos K-Means";
+    }
+
+    // Paleta de colores (solo modo color)
+    let paletteHtml = "";
+    if (isColor) {
+        const swatches = data.layer_stats.map(s => {
+            const displayColor = s.color_hex_display || s.color_hex;
+            return `
+            <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+                <div style="width:40px; height:40px; border-radius:6px; background:${displayColor};
+                            border:2px solid rgba(255,255,255,0.2);"></div>
+                <span style="font-size:0.65rem; font-family:monospace; color:var(--text-secondary);">
+                    ${(s.color_hex || "").toUpperCase()}
+                </span>
+            </div>`;
+        }).join("");
+        paletteHtml = `
+            <div style="display:flex; gap:12px; align-items:flex-end; padding:0.75rem 1rem;
+                        background:var(--bg-secondary); border-radius:8px; margin-bottom:1rem;
+                        border:1px solid var(--border);">
+                <span style="font-size:0.8rem; color:var(--text-secondary); margin-right:4px;">Paleta:</span>
+                ${swatches}
+            </div>`;
+    }
+
+    let cardsHtml = "";
+    for (const stat of data.layer_stats) {
+        const displayColor = (isColor && stat.color_hex_display) ? stat.color_hex_display : stat.color_hex;
+        const headerBg = isColor && displayColor
+            ? `background:${displayColor};`
+            : "";
+        // Calcular si el color es claro u oscuro para el texto del header
+        let headerTextColor = "var(--text-primary)";
+        if (isColor && displayColor) {
+            const r = parseInt(displayColor.slice(1,3), 16);
+            const g = parseInt(displayColor.slice(3,5), 16);
+            const b = parseInt(displayColor.slice(5,7), 16);
+            const luminance = (0.299*r + 0.587*g + 0.114*b) / 255;
+            headerTextColor = luminance > 0.5 ? "#1a1a2e" : "#ffffff";
+        }
+
+        const headerRight = isColor && stat.color_hex
+            ? `<span style="font-family:monospace; font-size:0.75rem; color:${headerTextColor}; opacity:0.85;">
+                   ${stat.color_hex.toUpperCase()}
+               </span>`
+            : `<span style="color:var(--text-secondary); font-size:0.8rem;">tono ${stat.tonal_center}</span>`;
+
+        cardsHtml += `
             <div class="layer-card">
-                <div class="card-header">
+                <div class="card-header" style="${headerBg} color:${headerTextColor};">
                     <span>${stat.name.split(" (")[0]}</span>
-                    <span>${colorSwatch}</span>
+                    ${headerRight}
                 </div>
                 <img src="data:image/png;base64,${data.layer_previews[stat.layer]}" alt="${stat.name}">
                 <div class="card-stats">
@@ -377,10 +441,22 @@ function renderLayers(data) {
                 </div>
             </div>`;
     }
-    els.layersGrid.innerHTML = html;
+
+    els.layersGrid.innerHTML = paletteHtml + cardsHtml;
 }
 
 // --- Tile Info ---
+
+function getPaintSizeParams() {
+    const w = $("#paintWidth").value;
+    const h = $("#paintHeight").value;
+    const unit = $("#paintUnit").value;
+    const params = {};
+    if (w) params.paint_width = w;
+    if (h) params.paint_height = h;
+    if (w || h) params.paint_unit = unit;
+    return params;
+}
 
 async function handleTileInfo() {
     if (!state.sessionId || !state.processed) return;
@@ -389,18 +465,22 @@ async function handleTileInfo() {
         session_id: state.sessionId,
         paper_size: $("#paperSize").value,
         dpi: $("#dpi").value,
+        ...getPaintSizeParams(),
     });
 
     try {
         const resp = await apiCall(`/tile-info?${params}`);
         const data = await resp.json();
 
+        const sizeInfo = data.real_size_cm
+            ? `Tamaño real: ${data.real_size_cm[0]} × ${data.real_size_cm[1]} cm | `
+            : "";
         els.tileInfoText.textContent =
-            `${data.total_pages_per_layer} paginas por capa x ${data.layer_stats?.length || parseInt($("#nLayers").value)} capas = ` +
-            `${data.total_pages_all_layers} paginas total | ` +
-            `Grid: ${data.num_rows} filas x ${data.num_cols} columnas | ` +
-            `Area imprimible: ${data.tile_size_in[0]}" x ${data.tile_size_in[1]}" | ` +
-            `DPI: ${data.dpi}`;
+            `${sizeInfo}` +
+            `${data.total_pages_per_layer} pág/capa × ${parseInt($("#nLayers").value)} capas = ` +
+            `${data.total_pages_all_layers} páginas total | ` +
+            `Grid: ${data.num_rows} filas × ${data.num_cols} columnas | ` +
+            `Hoja imprimible: ${data.tile_size_in[0]}" × ${data.tile_size_in[1]}"  ${data.dpi} DPI`;
 
         // Visual grid
         let gridHTML = "";
@@ -429,6 +509,7 @@ async function handleExport() {
         session_id: state.sessionId,
         paper_size: $("#paperSize").value,
         dpi: $("#dpi").value,
+        ...getPaintSizeParams(),
     });
 
     showLoading("Generando PDF multi-pagina...");
@@ -479,6 +560,31 @@ function initSliders() {
     }
 }
 
+// --- Paint size live hint ---
+
+function updatePaintSizeHint() {
+    const hint = $("#paintSizeHint");
+    if (!hint) return;
+    const w = parseFloat($("#paintWidth").value);
+    const h = parseFloat($("#paintHeight").value);
+    const unit = $("#paintUnit").value;
+
+    if (!w && !h) {
+        hint.style.display = "none";
+        return;
+    }
+
+    const label = unit === "cm" ? "cm" : '"';
+    let text = "→ Stencil escalado a ";
+    if (w && h) text += `${w} × ${h} ${label}`;
+    else if (w) text += `ancho ${w} ${label} (alto proporcional)`;
+    else text += `alto ${h} ${label} (ancho proporcional)`;
+    text += " — haz clic en 'Ver distribución' para ver las hojas";
+
+    hint.textContent = text;
+    hint.style.display = "block";
+}
+
 // --- Init ---
 
 function init() {
@@ -490,6 +596,12 @@ function init() {
     els.btnProcess.addEventListener("click", handleProcess);
     els.btnExport.addEventListener("click", handleExport);
     els.btnTileInfo.addEventListener("click", handleTileInfo);
+
+    // Live paint size hint
+    ["paintWidth", "paintHeight", "paintUnit"].forEach(id => {
+        const el = $(`#${id}`);
+        if (el) el.addEventListener("input", updatePaintSizeHint);
+    });
 }
 
 init();
