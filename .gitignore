@@ -1,0 +1,26 @@
+# Entorno virtual Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Archivos temporales
+*.log
+*.tmp
+/tmp/
+
+# Sesiones y uploads del backend
+backend/sessions/
+backend/uploads/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Instrucciones del agente (no va al repo)
+CLAUDE.md
