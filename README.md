@@ -20,7 +20,7 @@ Cada capa tonal se convierte en una plantilla independiente. Las imprimes, recor
 ### 1. Instalar dependencias (solo la primera vez)
 
 ```bash
-cd generate-stencil
+cd stencilforge
 python3 -m venv venv
 source venv/bin/activate
 pip install fastapi uvicorn python-multipart Pillow numpy opencv-python-headless scikit-learn reportlab
