@@ -1,6 +1,50 @@
-# Generador de Stencils Multi-Capa
+# StencilForge
 
-Convierte fotos o ilustraciones en plantillas (stencils) listas para imprimir y pintar, usando Machine Learning y Computer Vision.
+**Pipeline de ML/DL que convierte fotografías en stencils multi-capa listos para pintar.**
+
+Sube una foto → obtén un PDF imprimible con capas tonales, bordes limpios y puentes automáticos — listo para recortar y pintar.
+
+---
+
+## Demo
+
+### Paso 1 — Sube tu imagen
+![Paso 1](docs/images/Paso1.png)
+
+### Paso 2 — Configura y procesa
+![Paso 2](docs/images/Paso2.png)
+
+### Detalle de capas — separación tonal K-Means
+![Detalle capas](docs/images/Detalle_capas.png)
+
+### Resultado final — preview del stencil
+![Resultado final](docs/images/Detalle_resultadofinal.png)
+
+### PDF — distribución de hojas con marcas de registro
+![PDF hojas](docs/images/Pdf-hojas.png)
+
+### PDF — detalle de capa imprimible
+![PDF detalle](docs/images/Pdf-detalles.png)
+
+---
+
+## Pipeline ML/DL
+
+```
+Foto  →  [U2-Net: remover fondo]  →  [K-Means: N capas tonales]  →  [Canny: bordes]
+      →  [CCL: detectar islas]   →  [Puentes automáticos]        →  PDF por capas
+```
+
+| Técnica | Librería | Propósito |
+|---------|---------|-----------|
+| U2-Net (segmentación semántica) | rembg / ONNX | Remoción de fondo |
+| K-Means + espacio LAB | scikit-learn | Cuantización tonal perceptualmente uniforme |
+| Silhouette Score + Elbow Method | scikit-learn | Selección automática de K óptimo |
+| Canny adaptativo | OpenCV | Bordes con umbrales por percentil de gradiente |
+| Connected Component Labeling | OpenCV | Detección de islas por capa |
+| Operaciones morfológicas | OpenCV | Limpieza, erosión, dilatación, closing |
+| Filtro Bilateral (opcional) | OpenCV | Pre-procesado: suaviza ruido, preserva bordes |
+| SLIC Superpixels (opcional) | scikit-image | Pre-agrupación espacial antes de K-Means |
 
 ---
 
