@@ -308,6 +308,7 @@ async function handleProcess() {
     if (!state.sessionId) return;
 
     const mode = document.querySelector('input[name="mode"]:checked')?.value || "grayscale";
+    const useSlic = $("#useSlic").checked;
     const params = new URLSearchParams({
         session_id: state.sessionId,
         n_layers: $("#nLayers").value,
@@ -319,6 +320,8 @@ async function handleProcess() {
         morph_clean: $("#morphClean").checked,
         use_edges: $("#useEdges").checked,
         mode,
+        use_slic: useSlic,
+        slic_segments: $("#slicSegments").value,
     });
 
     // Limpiar resultados anteriores antes de procesar
@@ -328,7 +331,10 @@ async function handleProcess() {
     hide(els.tileState);
     state.processed = false;
 
-    showLoading("Generando stencil... (K-Means + bordes + islas + puentes)");
+    showLoading(useSlic
+        ? "Generando stencil... (SLIC + K-Means + bordes + islas + puentes)"
+        : "Generando stencil... (K-Means + bordes + islas + puentes)"
+    );
     setStatus("Procesando pipeline completo...");
 
     try {
@@ -549,7 +555,17 @@ function initSliders() {
         { id: "bridgeWidth", display: "bridgeWidthValue" },
         { id: "bridgesPerIsland", display: "bridgesPerIslandValue" },
         { id: "dpi", display: "dpiValue" },
+        { id: "slicSegments", display: "slicSegmentsValue" },
     ];
+
+    // Toggle panel de segmentos SLIC al activar/desactivar el checkbox
+    const slicCheckbox = $("#useSlic");
+    const slicGroup = $("#slicSegmentsGroup");
+    if (slicCheckbox && slicGroup) {
+        slicCheckbox.addEventListener("change", () => {
+            slicGroup.classList.toggle("hidden", !slicCheckbox.checked);
+        });
+    }
 
     for (const { id, display, transform } of sliders) {
         const input = $(`#${id}`);

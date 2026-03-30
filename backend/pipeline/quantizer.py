@@ -14,12 +14,111 @@ Pipeline color (LAB):
 
 LAB es superior a RGB para clustering porque la distancia euclidiana
 en LAB corresponde a diferencias percibidas por el ojo humano.
+
+Modo SLIC (opcional):
+    Pre-agrupacion espacial con SLIC Superpixels antes de K-Means.
+    Cada superpixel agrupa pixeles similares en color Y posicion,
+    produciendo capas con bordes mas limpios y coherentes.
+    K-Means opera sobre ~300 superpixeles en lugar de millones de pixeles.
 """
 
 import cv2
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+
+
+# ---------------------------------------------------------------------------
+# SLIC helpers
+# ---------------------------------------------------------------------------
+
+def _slic_segments_gray(
+    gray_image: np.ndarray,
+    n_segments: int = 300,
+    compactness: float = 10.0,
+) -> tuple:
+    """
+    Genera superpixeles SLIC sobre imagen en escala de grises.
+
+    SLIC (Simple Linear Iterative Clustering) agrupa pixeles por similitud
+    de color Y proximidad espacial, produciendo regiones compactas y conexas.
+    Esto corrige la debilidad de K-Means puro, que ignora posicion espacial.
+
+    Args:
+        gray_image: Imagen (H, W) uint8.
+        n_segments: Numero aproximado de superpixeles a generar.
+        compactness: Peso del factor espacial vs. color (mayor = mas compacto).
+
+    Returns:
+        (segment_map, features):
+            - segment_map: (H, W) int, ID de superpixel por pixel.
+            - features: (n_sp, 1) float32, media normalizada de gris por superpixel.
+    """
+    from skimage.segmentation import slic
+    from skimage.color import gray2rgb
+
+    # SLIC necesita imagen RGB o LAB; convertimos gris a RGB (R=G=B)
+    rgb = gray2rgb(gray_image)
+    segment_map = slic(
+        rgb,
+        n_segments=n_segments,
+        compactness=compactness,
+        sigma=1,
+        start_label=0,
+        channel_axis=-1,
+    )
+
+    n_sp = int(segment_map.max()) + 1
+    features = np.zeros((n_sp, 1), dtype=np.float32)
+    gray_f = gray_image.astype(np.float32) / 255.0
+    for sp_id in range(n_sp):
+        mask = segment_map == sp_id
+        features[sp_id, 0] = gray_f[mask].mean()
+
+    return segment_map, features
+
+
+def _slic_segments_lab(
+    image_bgr: np.ndarray,
+    n_segments: int = 300,
+    compactness: float = 10.0,
+) -> tuple:
+    """
+    Genera superpixeles SLIC sobre imagen BGR usando espacio LAB internamente.
+
+    Args:
+        image_bgr: Imagen (H, W, 3) uint8.
+        n_segments: Numero aproximado de superpixeles.
+        compactness: Peso del factor espacial vs. color.
+
+    Returns:
+        (segment_map, features):
+            - segment_map: (H, W) int.
+            - features: (n_sp, 3) float32, media LAB normalizada por superpixel.
+    """
+    from skimage.segmentation import slic
+
+    # SLIC con convert2lab=True opera en LAB internamente (requiere RGB input)
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    segment_map = slic(
+        rgb,
+        n_segments=n_segments,
+        compactness=compactness,
+        sigma=1,
+        start_label=0,
+        convert2lab=True,
+        channel_axis=-1,
+    )
+
+    # Features: media LAB por superpixel (misma representacion que quantize_color)
+    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32) / 255.0
+    n_sp = int(segment_map.max()) + 1
+    features = np.zeros((n_sp, 3), dtype=np.float32)
+    for sp_id in range(n_sp):
+        mask = segment_map == sp_id
+        features[sp_id] = lab[mask].mean(axis=0)
+
+    return segment_map, features
 
 
 def find_optimal_layers(
@@ -98,20 +197,26 @@ def quantize_tonal(
     gray_image: np.ndarray,
     n_layers: int = 3,
     sample_size: int = 100000,
+    use_slic: bool = False,
+    slic_segments: int = 300,
 ) -> dict:
     """
     Cuantiza la imagen en N capas tonales usando K-Means.
 
     El proceso:
-    1. Aplanar pixeles y escalar
-    2. Aplicar K-Means con k = n_layers
-    3. Ordenar clusters de oscuro a claro
-    4. Generar mascara binaria por cada capa
+    1. (Opcional) Pre-agrupar pixeles en superpixeles SLIC para coherencia espacial
+    2. Aplanar pixeles/superpixeles y escalar
+    3. Aplicar K-Means con k = n_layers
+    4. Ordenar clusters de oscuro a claro
+    5. Generar mascara binaria por cada capa
 
     Args:
         gray_image: Imagen en escala de grises (H, W), dtype uint8.
         n_layers: Numero de capas tonales (2-6).
-        sample_size: Pixeles para entrenar K-Means (el modelo se aplica a todos).
+        sample_size: Pixeles para entrenar K-Means cuando use_slic=False.
+        use_slic: Si True, pre-agrupa con SLIC antes de K-Means.
+                  Produce capas mas limpias y con bordes mas coherentes.
+        slic_segments: Numero aproximado de superpixeles SLIC (~200-500).
 
     Returns:
         dict con:
@@ -121,21 +226,9 @@ def quantize_tonal(
             - 'quantized_image': Imagen cuantizada (cada pixel = centro de su cluster)
             - 'inertia': Inercia del modelo
             - 'layer_percentages': Porcentaje de pixeles en cada capa
+            - 'slic_used': bool indicando si se uso SLIC
     """
     h, w = gray_image.shape
-    pixels = gray_image.flatten().astype(np.float32).reshape(-1, 1)
-
-    # Entrenar K-Means en muestra
-    if len(pixels) > sample_size:
-        rng = np.random.default_rng(42)
-        indices = rng.choice(len(pixels), size=sample_size, replace=False)
-        pixels_sample = pixels[indices]
-    else:
-        pixels_sample = pixels
-
-    pixels_norm_sample = pixels_sample / 255.0
-    pixels_norm_all = pixels / 255.0
-
     kmeans = KMeans(
         n_clusters=n_layers,
         init="k-means++",
@@ -143,32 +236,39 @@ def quantize_tonal(
         max_iter=300,
         random_state=42,
     )
-    kmeans.fit(pixels_norm_sample)
 
-    # Predecir labels para TODOS los pixeles
-    labels = kmeans.predict(pixels_norm_all)
-
-    # Centros en escala original [0, 255]
-    centers_original = (kmeans.cluster_centers_.flatten() * 255.0)
+    if use_slic:
+        # Modo SLIC: K-Means sobre features de superpixeles (~300 puntos en lugar de miles)
+        segment_map, sp_features = _slic_segments_gray(gray_image, n_segments=slic_segments)
+        kmeans.fit(sp_features)
+        # Cada superpixel recibe un label; cada pixel hereda el label de su superpixel
+        sp_labels = kmeans.labels_
+        labels = sp_labels[segment_map]  # (H, W) — vectorizado sin bucle
+        centers_original = kmeans.cluster_centers_.flatten() * 255.0
+    else:
+        # Modo clasico: K-Means sobre pixeles individuales
+        pixels = gray_image.flatten().astype(np.float32).reshape(-1, 1)
+        if len(pixels) > sample_size:
+            rng = np.random.default_rng(42)
+            indices = rng.choice(len(pixels), size=sample_size, replace=False)
+            pixels_sample = pixels[indices]
+        else:
+            pixels_sample = pixels
+        kmeans.fit(pixels_sample / 255.0)
+        labels = kmeans.predict(pixels.flatten().reshape(-1, 1) / 255.0).reshape(h, w)
+        centers_original = kmeans.cluster_centers_.flatten() * 255.0
 
     # Ordenar clusters de oscuro a claro
     sort_order = np.argsort(centers_original)
-    # Re-mapear labels segun el nuevo orden
     label_remap = np.zeros(n_layers, dtype=int)
     for new_idx, old_idx in enumerate(sort_order):
         label_remap[old_idx] = new_idx
 
-    labels_sorted = label_remap[labels]
+    labels_map = label_remap[labels]  # (H, W)
     centers_sorted = centers_original[sort_order]
 
-    # Reshape a imagen
-    labels_map = labels_sorted.reshape(h, w)
+    quantized = centers_sorted[labels_map].astype(np.uint8)
 
-    # Generar imagen cuantizada
-    quantized = centers_sorted[labels_sorted].reshape(h, w).astype(np.uint8)
-
-    # Generar mascaras binarias por capa
-    # Capa 0 = mas oscura (sombras), Capa N-1 = mas clara (luces)
     layers = []
     layer_percentages = []
     for i in range(n_layers):
@@ -184,7 +284,8 @@ def quantize_tonal(
         "quantized_image": quantized,
         "inertia": float(kmeans.inertia_),
         "layer_percentages": layer_percentages,
-        "layer_colors_hex": [None] * n_layers,  # Grayscale: sin color
+        "layer_colors_hex": [None] * n_layers,
+        "slic_used": use_slic,
     }
 
 
@@ -192,6 +293,8 @@ def quantize_color(
     image_bgr: np.ndarray,
     n_layers: int = 4,
     sample_size: int = 100000,
+    use_slic: bool = False,
+    slic_segments: int = 300,
 ) -> dict:
     """
     Cuantiza la imagen en N capas de color usando K-Means en espacio LAB.
@@ -203,7 +306,9 @@ def quantize_color(
     Args:
         image_bgr: Imagen BGR (H, W, 3), dtype uint8.
         n_layers: Numero de colores/capas.
-        sample_size: Pixeles para entrenar K-Means.
+        sample_size: Pixeles para entrenar K-Means cuando use_slic=False.
+        use_slic: Si True, pre-agrupa con SLIC antes de K-Means.
+        slic_segments: Numero aproximado de superpixeles SLIC.
 
     Returns:
         dict con:
@@ -214,20 +319,9 @@ def quantize_color(
             - 'quantized_image': Imagen cuantizada en color BGR
             - 'layer_percentages': Porcentaje de pixeles por capa
             - 'centers': Centros LAB (referencia)
+            - 'slic_used': bool indicando si se uso SLIC
     """
     h, w = image_bgr.shape[:2]
-
-    # Convertir BGR -> LAB
-    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    pixels = lab.reshape(-1, 3) / 255.0  # Normalizar a [0,1]
-
-    # Muestrear para velocidad
-    if len(pixels) > sample_size:
-        rng = np.random.default_rng(42)
-        idx = rng.choice(len(pixels), size=sample_size, replace=False)
-        pixels_sample = pixels[idx]
-    else:
-        pixels_sample = pixels
 
     kmeans = KMeans(
         n_clusters=n_layers,
@@ -236,12 +330,28 @@ def quantize_color(
         max_iter=300,
         random_state=42,
     )
-    kmeans.fit(pixels_sample)
 
-    labels = kmeans.predict(pixels)
-
-    # Centros en escala LAB original [0,255]
-    centers_lab = (kmeans.cluster_centers_ * 255.0).astype(np.uint8)
+    if use_slic:
+        # Modo SLIC: K-Means sobre features LAB de superpixeles
+        segment_map, sp_features = _slic_segments_lab(image_bgr, n_segments=slic_segments)
+        kmeans.fit(sp_features)
+        sp_labels = kmeans.labels_
+        labels_map = sp_labels[segment_map]  # (H, W)
+        centers_lab = (kmeans.cluster_centers_ * 255.0).astype(np.uint8)
+    else:
+        # Modo clasico: K-Means sobre pixeles individuales
+        lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        pixels = lab.reshape(-1, 3) / 255.0
+        if len(pixels) > sample_size:
+            rng = np.random.default_rng(42)
+            idx = rng.choice(len(pixels), size=sample_size, replace=False)
+            pixels_sample = pixels[idx]
+        else:
+            pixels_sample = pixels
+        kmeans.fit(pixels_sample)
+        labels = kmeans.predict(pixels)
+        centers_lab = (kmeans.cluster_centers_ * 255.0).astype(np.uint8)
+        labels_map = labels.reshape(h, w)
 
     # Ordenar clusters por luminosidad (canal L, indice 0 en OpenCV LAB)
     sort_order = np.argsort(centers_lab[:, 0])
@@ -249,9 +359,8 @@ def quantize_color(
     for new_idx, old_idx in enumerate(sort_order):
         label_remap[old_idx] = new_idx
 
-    labels_sorted = label_remap[labels]
     centers_lab_sorted = centers_lab[sort_order]
-    labels_map = labels_sorted.reshape(h, w)
+    labels_map = label_remap[labels_map]  # (H, W)
 
     # Convertir centros LAB -> BGR y calcular hex
     layer_colors_bgr = []
@@ -286,4 +395,5 @@ def quantize_color(
         "layer_percentages": layer_percentages,
         "centers": centers_lab_sorted.tolist(),
         "inertia": float(kmeans.inertia_),
+        "slic_used": use_slic,
     }

@@ -610,6 +610,19 @@
                     <label for="morphClean">Limpieza morfologica</label>
                 </div>
 
+                <div class="checkbox-group">
+                    <input type="checkbox" id="useSlic">
+                    <label for="useSlic">SLIC Superpixeles <span style="font-size:0.8em;opacity:0.7">(capas mas limpias, mas lento)</span></label>
+                </div>
+
+                <div class="control-group hidden" id="slicSegmentsGroup">
+                    <label>
+                        Superpixeles SLIC
+                        <span class="value-display" id="slicSegmentsValue">300</span>
+                    </label>
+                    <input type="range" id="slicSegments" min="100" max="800" step="50" value="300">
+                </div>
+
                 <button class="btn btn-primary" id="btnProcess">
                     Generar Stencil
                 </button>

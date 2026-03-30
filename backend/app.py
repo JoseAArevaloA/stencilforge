@@ -211,11 +211,13 @@ async def process_stencil(
     morph_kernel: int = 3,
     use_edges: bool = True,
     mode: str = "grayscale",  # "grayscale" | "color"
+    use_slic: bool = False,
+    slic_segments: int = 300,
 ):
     """
     Pipeline completo de generacion de stencil.
 
-    1. Cuantizacion K-Means en N capas
+    1. Cuantizacion K-Means en N capas (con SLIC pre-agrupacion opcional)
     2. Deteccion de bordes (opcional)
     3. Combinacion bordes + capas tonales
     4. Generacion de stencil por capa (islas + puentes)
@@ -228,11 +230,15 @@ async def process_stencil(
 
     # Cuantizacion segun modo
     if mode == "color":
-        quant_result = quantize_color(source, n_layers=n_layers)
+        quant_result = quantize_color(
+            source, n_layers=n_layers, use_slic=use_slic, slic_segments=slic_segments
+        )
     else:
         gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         session["gray"] = gray
-        quant_result = quantize_tonal(gray, n_layers=n_layers)
+        quant_result = quantize_tonal(
+            gray, n_layers=n_layers, use_slic=use_slic, slic_segments=slic_segments
+        )
 
     # Deteccion de bordes (siempre en escala de grises)
     edge_map = None
