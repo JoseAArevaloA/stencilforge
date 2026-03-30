@@ -20,12 +20,57 @@ Modo SLIC (opcional):
     Cada superpixel agrupa pixeles similares en color Y posicion,
     produciendo capas con bordes mas limpios y coherentes.
     K-Means opera sobre ~300 superpixeles en lugar de millones de pixeles.
+    Nota: SLIC pierde detalles finos en retratos (ojos, labios). Usar
+    Bilateral Filter para ese caso de uso.
+
+Modo Bilateral Filter (opcional, recomendado para retratos):
+    Filtro bilateral de OpenCV aplicado antes de K-Means.
+    Suaviza ruido y texturas suaves (piel) mientras preserva bordes
+    nitidos (ojos, labios, siluetas). Reduce islas pequenas sin perder
+    detalles importantes.
+    Presets de intensidad: light / medium / strong.
 """
 
 import cv2
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+
+
+# ---------------------------------------------------------------------------
+# Bilateral Filter helper
+# ---------------------------------------------------------------------------
+
+# Parametros por preset: (d, sigmaColor, sigmaSpace)
+_BILATERAL_PRESETS = {
+    "light":  (7,  30,  30),
+    "medium": (9,  75,  75),
+    "strong": (11, 150, 150),
+}
+
+def _apply_bilateral(image: np.ndarray, strength: str = "medium") -> np.ndarray:
+    """
+    Aplica filtro bilateral a imagen en escala de grises o BGR.
+
+    El filtro bilateral es no-lineal: promedia pixeles cercanos pesando
+    tanto la distancia espacial (sigmaSpace) como la similitud de color
+    (sigmaColor). Resultado: ruido y textura fina se suavizan, bordes
+    nitidos se preservan.
+
+    Parametros por preset:
+        light:  d=7,  sigmaColor=30,  sigmaSpace=30   (suavizado leve)
+        medium: d=9,  sigmaColor=75,  sigmaSpace=75   (retratos, general)
+        strong: d=11, sigmaColor=150, sigmaSpace=150  (simplificacion maxima)
+
+    Args:
+        image: Imagen uint8, (H,W) gris o (H,W,3) BGR.
+        strength: Preset de intensidad ('light', 'medium', 'strong').
+
+    Returns:
+        Imagen filtrada, mismo shape y dtype que la entrada.
+    """
+    d, sc, ss = _BILATERAL_PRESETS.get(strength, _BILATERAL_PRESETS["medium"])
+    return cv2.bilateralFilter(image, d, sc, ss)
 
 
 # ---------------------------------------------------------------------------
@@ -199,13 +244,15 @@ def quantize_tonal(
     sample_size: int = 100000,
     use_slic: bool = False,
     slic_segments: int = 300,
+    bilateral_filter: bool = False,
+    bilateral_strength: str = "medium",
 ) -> dict:
     """
     Cuantiza la imagen en N capas tonales usando K-Means.
 
     El proceso:
-    1. (Opcional) Pre-agrupar pixeles en superpixeles SLIC para coherencia espacial
-    2. Aplanar pixeles/superpixeles y escalar
+    1. (Opcional) Filtro bilateral — suaviza ruido preservando bordes
+    2. (Opcional) Pre-agrupar pixeles en superpixeles SLIC
     3. Aplicar K-Means con k = n_layers
     4. Ordenar clusters de oscuro a claro
     5. Generar mascara binaria por cada capa
@@ -215,8 +262,10 @@ def quantize_tonal(
         n_layers: Numero de capas tonales (2-6).
         sample_size: Pixeles para entrenar K-Means cuando use_slic=False.
         use_slic: Si True, pre-agrupa con SLIC antes de K-Means.
-                  Produce capas mas limpias y con bordes mas coherentes.
         slic_segments: Numero aproximado de superpixeles SLIC (~200-500).
+        bilateral_filter: Si True, aplica filtro bilateral antes de K-Means.
+                          Recomendado para retratos: suaviza piel preservando ojos/labios.
+        bilateral_strength: Preset de intensidad ('light', 'medium', 'strong').
 
     Returns:
         dict con:
@@ -228,6 +277,10 @@ def quantize_tonal(
             - 'layer_percentages': Porcentaje de pixeles en cada capa
             - 'slic_used': bool indicando si se uso SLIC
     """
+    # Pre-procesado opcional: filtro bilateral
+    if bilateral_filter:
+        gray_image = _apply_bilateral(gray_image, bilateral_strength)
+
     h, w = gray_image.shape
     kmeans = KMeans(
         n_clusters=n_layers,
@@ -286,6 +339,7 @@ def quantize_tonal(
         "layer_percentages": layer_percentages,
         "layer_colors_hex": [None] * n_layers,
         "slic_used": use_slic,
+        "bilateral_used": bilateral_filter,
     }
 
 
@@ -295,6 +349,8 @@ def quantize_color(
     sample_size: int = 100000,
     use_slic: bool = False,
     slic_segments: int = 300,
+    bilateral_filter: bool = False,
+    bilateral_strength: str = "medium",
 ) -> dict:
     """
     Cuantiza la imagen en N capas de color usando K-Means en espacio LAB.
@@ -309,6 +365,8 @@ def quantize_color(
         sample_size: Pixeles para entrenar K-Means cuando use_slic=False.
         use_slic: Si True, pre-agrupa con SLIC antes de K-Means.
         slic_segments: Numero aproximado de superpixeles SLIC.
+        bilateral_filter: Si True, aplica filtro bilateral antes de K-Means.
+        bilateral_strength: Preset de intensidad ('light', 'medium', 'strong').
 
     Returns:
         dict con:
@@ -321,6 +379,10 @@ def quantize_color(
             - 'centers': Centros LAB (referencia)
             - 'slic_used': bool indicando si se uso SLIC
     """
+    # Pre-procesado opcional: filtro bilateral
+    if bilateral_filter:
+        image_bgr = _apply_bilateral(image_bgr, bilateral_strength)
+
     h, w = image_bgr.shape[:2]
 
     kmeans = KMeans(
@@ -396,4 +458,5 @@ def quantize_color(
         "centers": centers_lab_sorted.tolist(),
         "inertia": float(kmeans.inertia_),
         "slic_used": use_slic,
+        "bilateral_used": bilateral_filter,
     }

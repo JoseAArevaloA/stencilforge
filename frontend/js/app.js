@@ -309,6 +309,7 @@ async function handleProcess() {
 
     const mode = document.querySelector('input[name="mode"]:checked')?.value || "grayscale";
     const useSlic = $("#useSlic").checked;
+    const useBilateral = $("#bilateralFilter").checked;
     const params = new URLSearchParams({
         session_id: state.sessionId,
         n_layers: $("#nLayers").value,
@@ -322,6 +323,8 @@ async function handleProcess() {
         mode,
         use_slic: useSlic,
         slic_segments: $("#slicSegments").value,
+        bilateral_filter: useBilateral,
+        bilateral_strength: $("#bilateralStrength").value,
     });
 
     // Limpiar resultados anteriores antes de procesar
@@ -558,12 +561,21 @@ function initSliders() {
         { id: "slicSegments", display: "slicSegmentsValue" },
     ];
 
-    // Toggle panel de segmentos SLIC al activar/desactivar el checkbox
+    // Toggle panel de segmentos SLIC
     const slicCheckbox = $("#useSlic");
     const slicGroup = $("#slicSegmentsGroup");
     if (slicCheckbox && slicGroup) {
         slicCheckbox.addEventListener("change", () => {
             slicGroup.classList.toggle("hidden", !slicCheckbox.checked);
+        });
+    }
+
+    // Toggle panel de intensidad de filtro bilateral
+    const bilateralCheckbox = $("#bilateralFilter");
+    const bilateralGroup = $("#bilateralStrengthGroup");
+    if (bilateralCheckbox && bilateralGroup) {
+        bilateralCheckbox.addEventListener("change", () => {
+            bilateralGroup.classList.toggle("hidden", !bilateralCheckbox.checked);
         });
     }
 

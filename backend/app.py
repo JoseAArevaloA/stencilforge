@@ -213,6 +213,8 @@ async def process_stencil(
     mode: str = "grayscale",  # "grayscale" | "color"
     use_slic: bool = False,
     slic_segments: int = 300,
+    bilateral_filter: bool = False,
+    bilateral_strength: str = "medium",  # "light" | "medium" | "strong"
 ):
     """
     Pipeline completo de generacion de stencil.
@@ -231,13 +233,17 @@ async def process_stencil(
     # Cuantizacion segun modo
     if mode == "color":
         quant_result = quantize_color(
-            source, n_layers=n_layers, use_slic=use_slic, slic_segments=slic_segments
+            source, n_layers=n_layers,
+            use_slic=use_slic, slic_segments=slic_segments,
+            bilateral_filter=bilateral_filter, bilateral_strength=bilateral_strength,
         )
     else:
         gray = cv2.cvtColor(source, cv2.COLOR_BGR2GRAY)
         session["gray"] = gray
         quant_result = quantize_tonal(
-            gray, n_layers=n_layers, use_slic=use_slic, slic_segments=slic_segments
+            gray, n_layers=n_layers,
+            use_slic=use_slic, slic_segments=slic_segments,
+            bilateral_filter=bilateral_filter, bilateral_strength=bilateral_strength,
         )
 
     # Deteccion de bordes (siempre en escala de grises)

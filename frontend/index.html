@@ -611,8 +611,22 @@
                 </div>
 
                 <div class="checkbox-group">
+                    <input type="checkbox" id="bilateralFilter">
+                    <label for="bilateralFilter">Filtro Bilateral <span style="font-size:0.8em;opacity:0.7">(suaviza ruido, preserva bordes — recomendado para retratos)</span></label>
+                </div>
+
+                <div class="control-group hidden" id="bilateralStrengthGroup">
+                    <label for="bilateralStrength">Intensidad del filtro</label>
+                    <select id="bilateralStrength">
+                        <option value="light">Leve — detalles maximos</option>
+                        <option value="medium" selected>Media — retratos</option>
+                        <option value="strong">Fuerte — simplificacion maxima</option>
+                    </select>
+                </div>
+
+                <div class="checkbox-group">
                     <input type="checkbox" id="useSlic">
-                    <label for="useSlic">SLIC Superpixeles <span style="font-size:0.8em;opacity:0.7">(capas mas limpias, mas lento)</span></label>
+                    <label for="useSlic">SLIC Superpixeles <span style="font-size:0.8em;opacity:0.7">(mejor para paisajes/objetos, no retratos)</span></label>
                 </div>
 
                 <div class="control-group hidden" id="slicSegmentsGroup">
